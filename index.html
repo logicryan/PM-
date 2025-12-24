@@ -1,0 +1,846 @@
+import React, { useState, useMemo } from 'react';
+import { 
+  CheckCircle, 
+  XCircle, 
+  RotateCcw, 
+  Thermometer, 
+  Calendar, 
+  Clock, 
+  List, 
+  Globe,
+  AlertTriangle,
+  ChevronRight,
+  FileText,
+  Info,
+  ExternalLink,
+  ClipboardList,
+  MessageSquare,
+  ArrowLeftRight,
+  Copy,
+  Check
+} from 'lucide-react';
+
+// 城市与时区配置
+const CITIES = [
+  { name: 'London', label: 'London (伦敦)', zone: 'Europe/London' },
+  { name: 'Buenos Aires', label: 'Buenos Aires (布宜诺斯艾利斯)', zone: 'America/Argentina/Buenos_Aires' },
+  { name: 'Toronto', label: 'Toronto (多伦多)', zone: 'America/Toronto' },
+  { name: 'New York City', label: 'New York City (纽约)', zone: 'America/New_York' },
+  { name: 'Atlanta', label: 'Atlanta (亚特兰大)', zone: 'America/New_York' },
+  { name: 'Dallas', label: 'Dallas (达拉斯)', zone: 'America/Chicago' },
+  { name: 'Seattle', label: 'Seattle (西雅图)', zone: 'America/Los_Angeles' },
+  { name: 'Seoul', label: 'Seoul (首尔)', zone: 'Asia/Seoul' },
+];
+
+export default function App() {
+  
+  // 表单初始状态
+  const [formData, setFormData] = useState({
+    city: 'London', 
+    
+    // 温度拆分为 C/F 两组，便于互转存储
+    proposalTempC: '',
+    proposalTempF: '',
+    websiteMaxTempC: '',
+    websiteMaxTempF: '',
+    
+    // 判定逻辑的首选单位: 'C' 或 'F'
+    preferredTempUnit: 'C',
+
+    isLastOption: '', 
+    proposalType: '', 
+    isToday: '',      
+    proposalTimestamp: '', 
+    localTimeDisplay: '',  
+    prevDataPoint: '',     
+    nextDataPoint: ''      
+  });
+
+  // 复制状态
+  const [copied, setCopied] = useState(false);
+
+  // --- 辅助函数 ---
+
+  // 1. 格式化时间戳显示
+  const formatLocalTime = (timestamp, zone) => {
+    try {
+      const date = new Date(parseInt(timestamp) * 1000);
+      const options = {
+        timeZone: zone,
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      };
+      const formatted = new Intl.DateTimeFormat('en-US', options).format(date);
+      return formatted.replace(',', ''); 
+    } catch (e) {
+      return '';
+    }
+  };
+
+  // 2. 解析用户输入的时间字符串
+  const parseUserDateString = (dateStr) => {
+    if (!dateStr) return null;
+    const regex = /(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})\s+(AM|PM)/i;
+    const match = dateStr.match(regex);
+    if (!match) return null;
+    
+    const [_, month, day, hour, minute, ampm] = match;
+    let h = parseInt(hour);
+    const m = parseInt(minute);
+    
+    if (ampm.toUpperCase() === 'PM' && h < 12) h += 12;
+    if (ampm.toUpperCase() === 'AM' && h === 12) h = 0;
+    
+    const now = new Date();
+    // 构造一个 Date 对象，年份取当前年
+    return new Date(now.getFullYear(), parseInt(month) - 1, parseInt(day), h, m, 0);
+  };
+
+  // 3. 温度转换工具
+  const cToF = (c) => {
+    if (c === '' || isNaN(c)) return '';
+    return (parseFloat(c) * 9 / 5 + 32).toFixed(1); 
+  };
+  
+  const fToC = (f) => {
+    if (f === '' || isNaN(f)) return '';
+    return ((parseFloat(f) - 32) * 5 / 9).toFixed(1); 
+  };
+
+  // 4. 复制功能
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  // --- 输入处理 ---
+  
+  // 通用处理
+  const handleInputChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    const finalValue = type === 'checkbox' ? checked : value;
+
+    setFormData(prev => {
+      const newData = { ...prev, [name]: finalValue };
+      
+      // 实时计算当地时间 (当城市或时间戳改变时)
+      if (name === 'city' || name === 'proposalTimestamp') {
+        const cityZone = CITIES.find(c => c.name === newData.city)?.zone;
+        const ts = newData.proposalTimestamp;
+        
+        if (cityZone && ts && ts.length === 10 && !isNaN(ts)) {
+          newData.localTimeDisplay = formatLocalTime(ts, cityZone);
+        } else {
+          newData.localTimeDisplay = '';
+        }
+      }
+      return newData;
+    });
+  };
+
+  // 切换判定单位
+  const setPreferredUnit = (unit) => {
+    setFormData(prev => ({
+      ...prev,
+      preferredTempUnit: unit
+    }));
+  };
+
+  // 专用温度处理 (处理双向绑定)
+  const handleTempChange = (type, unit, value) => {
+    setFormData(prev => {
+      const newData = { ...prev };
+      
+      if (unit === 'C') {
+        newData[`${type}TempC`] = value;
+        newData[`${type}TempF`] = cToF(value);
+      } else {
+        newData[`${type}TempF`] = value;
+        newData[`${type}TempC`] = fToC(value);
+      }
+      return newData;
+    });
+  };
+
+  const handleReset = () => {
+    setFormData(prev => ({
+      ...prev,
+      // 保持 city 和 unit 不变，重置其他
+      proposalTempC: '',
+      proposalTempF: '',
+      websiteMaxTempC: '',
+      websiteMaxTempF: '',
+      isLastOption: '',
+      proposalType: '',
+      isToday: '',
+      proposalTimestamp: '',
+      localTimeDisplay: '',
+      prevDataPoint: '',
+      nextDataPoint: ''
+    }));
+    setCopied(false);
+  };
+
+  // --- 核心逻辑状态计算 (Memoized) ---
+  const analysisState = useMemo(() => {
+    const unit = formData.preferredTempUnit;
+    const unitLabel = unit === 'C' ? '°C' : '°F';
+
+    // 根据首选单位获取数值
+    const tempProp = parseFloat(unit === 'C' ? formData.proposalTempC : formData.proposalTempF);
+    const tempMax = parseFloat(unit === 'C' ? formData.websiteMaxTempC : formData.websiteMaxTempF);
+    
+    // 获取用于显示的最高温 (确保有值)
+    const displayMaxTemp = unit === 'C' 
+      ? (formData.websiteMaxTempC ? `${formData.websiteMaxTempC}°C` : 'N/A')
+      : (formData.websiteMaxTempF ? `${formData.websiteMaxTempF}°F` : 'N/A');
+
+    const hasTemp = !isNaN(tempProp) && !isNaN(tempMax);
+
+    // 步骤 1: 检查温度
+    if (!hasTemp) {
+      return { status: 'waiting', currentStep: 1, message: '请输入温度数据以开始判断' };
+    }
+
+    // 情况 1: 提案温度 < 网站最高温
+    if (tempProp < tempMax) {
+      return {
+        status: 'complete',
+        resultType: 'cannot_challenge',
+        title: '不能质疑',
+        reason: '提案温度较低，可以提前确认。',
+        detail: `提案温度 (${tempProp}${unitLabel}) < 提案前网站最高温 (${tempMax}${unitLabel})`,
+        currentStep: 1
+      };
+    }
+
+    // 情况 2: 提案温度 = 网站最高温 -> 进入步骤 2 (检查选项)
+    if (tempProp === tempMax) {
+      if (!formData.isLastOption) {
+        return { status: 'waiting', currentStep: 2, message: '请选择提案位置' };
+      }
+      if (formData.isLastOption === 'yes') {
+        return {
+          status: 'complete',
+          resultType: 'cannot_challenge',
+          title: '不能质疑',
+          reason: '最高温超过了所有选项，可以提前确认。',
+          detail: `条件：温度持平 (${tempProp}${unitLabel}) 且 是最后1个选项。`,
+          currentStep: 2
+        };
+      }
+    }
+
+    // 情况 3: 提案温度 > 网站最高温 -> 跳过步骤 2，直接进入步骤 3
+    
+    // 步骤 3: 是否当日
+    if (!formData.isToday) {
+      return { status: 'waiting', currentStep: 3, message: '请选择是否为当日提案' };
+    }
+    
+    // --- 路径分支 ---
+    
+    // 分支 A: 是当日 -> 执行 4. 检查提案
+    if (formData.isToday === 'yes') {
+      if (!formData.proposalType) {
+        return { status: 'waiting', currentStep: 4, message: '请选择提案类型 (P2/P1)' };
+      }
+
+      // 4.1 P2 YES -> 可以质疑 (场景 1)
+      if (formData.proposalType === 'P2') {
+        return {
+          status: 'complete',
+          resultType: 'can_challenge',
+          title: '可以质疑',
+          detail: `条件满足：\n1. 温度判定通过 (${tempProp}${unitLabel} ${tempProp > tempMax ? '>' : '='} ${tempMax}${unitLabel})\n2. 是当日提案\n3. 提案类型为 P2 YES`,
+          challengeReason: {
+            cn: "P4 Too early 当天尚未结束，太早了",
+            en: "P4 Too early. The day has not ended yet, it is too early."
+          },
+          currentStep: 4
+        };
+      }
+
+      // 4.2 P1 NO -> 继续向下执行 Step 5
+    }
+
+    // 步骤 5: 检查下个数据点
+    if (!formData.localTimeDisplay || !formData.nextDataPoint) {
+        return { status: 'waiting', currentStep: 5, message: '请填写完整的时间信息' };
+    }
+
+    const proposalTimeObj = parseUserDateString(formData.localTimeDisplay);
+    const nextTimeObj = parseUserDateString(formData.nextDataPoint);
+
+    if (!proposalTimeObj || !nextTimeObj) {
+        return { status: 'waiting', currentStep: 5, message: '时间格式错误，请检查' };
+    }
+
+    // 计算时间差 (分钟)
+    const diffMs = proposalTimeObj - nextTimeObj;
+    const diffMinutes = diffMs / (1000 * 60);
+
+    // 逻辑分支
+    
+    // 1. 提案时间早于未发布下1个时间点 (diff < 0) -> 可以质疑 (场景 2)
+    if (diffMinutes < 0) {
+      
+      const proposalHour = proposalTimeObj.getHours();
+      let cnReason, enReason;
+      const minutesEarly = Math.abs(Math.round(diffMinutes));
+
+      // 场景 2-A: < 11:00 PM (23:00)
+      if (proposalHour < 23) {
+        cnReason = `P4 Too early 当日尚未结束，太早了，目前网站的最高温度是${displayMaxTemp}，低于提案温度`;
+        enReason = `P4 Too early. The day has not ended yet, it is too early. The current maximum temperature on the website is ${displayMaxTemp}, which is lower than the proposed temperature.`;
+      } 
+      // 场景 2-B: >= 11:00 PM (更新后的逻辑)
+      else {
+        cnReason = `P4 Too early 次日的第1个数据点还不可用，早了${minutesEarly}分钟`;
+        enReason = `P4 Too early. The first data point of the next day is not available yet. It was ${minutesEarly} minutes early.`;
+      }
+
+      return {
+        status: 'complete',
+        resultType: 'can_challenge',
+        title: '可以质疑',
+        detail: `提案时间 (${formData.localTimeDisplay}) 早于未发布的下一个时间点 (${formData.nextDataPoint})。\n早了 ${minutesEarly} 分钟。`,
+        challengeReason: {
+          cn: cnReason,
+          en: enReason
+        },
+        currentStep: 5
+      };
+    }
+
+    // 2.1 晚了5分钟及以上 -> 不能质疑 (红色)
+    if (diffMinutes >= 5) {
+      return {
+        status: 'complete',
+        resultType: 'cannot_challenge',
+        title: '不能质疑',
+        reason: '可能是 CDN 问题。',
+        detail: `提案时间 (${formData.localTimeDisplay}) 晚于未发布的下一个时间点 (${formData.nextDataPoint})。\n晚了 ${Math.round(diffMinutes)} 分钟 (>= 5分钟)。`,
+        currentStep: 5
+      };
+    } 
+    // 2.2 晚了5分钟内 -> 谨慎质疑 (黄色)
+    else {
+      return {
+        status: 'complete',
+        resultType: 'caution',
+        title: '谨慎质疑',
+        reason: '根据惯例，谨慎质疑，需要准备好证据。',
+        detail: `提案时间 (${formData.localTimeDisplay}) 晚于/等于未发布的下一个时间点 (${formData.nextDataPoint})。\n但仅晚了 ${diffMinutes.toFixed(1)} 分钟 (< 5分钟)。`,
+        // 新增：谨慎质疑的理由 (参考可以质疑)
+        challengeReason: {
+          cn: "P4 Too early，提案时次日的数据点还不可用",
+          en: "P4 Too early. The data point for the next day is not available yet at the time of proposal."
+        },
+        currentStep: 5
+      };
+    }
+
+    return { status: 'waiting', currentStep: 1 };
+  }, [formData]);
+
+
+  // 计算每个区块的显示状态
+  const getStepStatus = (stepIndex) => {
+    const unit = formData.preferredTempUnit;
+    const tempProp = parseFloat(unit === 'C' ? formData.proposalTempC : formData.proposalTempF);
+    const tempMax = parseFloat(unit === 'C' ? formData.websiteMaxTempC : formData.websiteMaxTempF);
+    const hasTemp = !isNaN(tempProp) && !isNaN(tempMax);
+
+    // 动态隐藏逻辑
+    if (stepIndex === 2 && hasTemp && tempProp > tempMax) return 'hidden';
+    if (stepIndex === 4 && formData.isToday !== 'yes') return 'hidden';
+    if (stepIndex === 5) {
+       if (formData.isToday === 'yes' && formData.proposalType !== 'P1') return 'hidden';
+       if (!formData.isToday) return 'hidden';
+    }
+
+    if (analysisState.status === 'complete') {
+        if (stepIndex > analysisState.currentStep) return 'disabled';
+        return 'active';
+    }
+
+    if (analysisState.currentStep === stepIndex) return 'current';
+    if (analysisState.currentStep > stepIndex) return 'completed';
+    return 'disabled';
+  };
+
+  const isStepHidden = (stepIndex) => getStepStatus(stepIndex) === 'hidden';
+  const isStepDisabled = (stepIndex) => getStepStatus(stepIndex) === 'disabled';
+
+  // 辅助：获取结果样式
+  const getResultStyle = (type) => {
+    switch (type) {
+      case 'can_challenge': // 绿色
+        return {
+          border: 'border-green-300 shadow-green-100 ring-4 ring-green-50',
+          bar: 'bg-green-500',
+          iconBg: 'bg-green-100 text-green-600',
+          title: 'text-green-700',
+          icon: CheckCircle,
+          prepBoxBg: 'bg-green-50',
+          prepBoxText: 'text-green-700',
+          prepBoxBorder: 'border-green-100',
+          reasonBoxBg: 'bg-blue-50', // 理由保持蓝色系，或者也可以根据类型变
+          reasonBoxText: 'text-blue-700',
+          reasonBoxBorder: 'border-blue-100'
+        };
+      case 'caution': // 黄色
+        return {
+          border: 'border-orange-300 shadow-orange-100 ring-4 ring-orange-50',
+          bar: 'bg-orange-500',
+          iconBg: 'bg-orange-100 text-orange-600',
+          title: 'text-orange-700',
+          icon: AlertTriangle,
+          prepBoxBg: 'bg-orange-50',
+          prepBoxText: 'text-orange-700',
+          prepBoxBorder: 'border-orange-100',
+          reasonBoxBg: 'bg-blue-50', // 理由保持蓝色系
+          reasonBoxText: 'text-blue-700',
+          reasonBoxBorder: 'border-blue-100'
+        };
+      case 'cannot_challenge': // 红色
+      default:
+        return {
+          border: 'border-red-300 shadow-red-100 ring-4 ring-red-50', 
+          bar: 'bg-red-500',
+          iconBg: 'bg-red-100 text-red-600',
+          title: 'text-red-700',
+          icon: XCircle
+        };
+    }
+  };
+
+  const resultStyle = analysisState.status === 'complete' ? getResultStyle(analysisState.resultType) : {};
+  const ResultIcon = resultStyle.icon;
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-800 p-4 sm:p-6 lg:p-8">
+      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        {/* --- 左侧输入区 --- */}
+        <div className="lg:col-span-7 space-y-6">
+          
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+            <h1 className="text-2xl font-bold text-slate-900 mb-2">提案合规性判断</h1>
+            <p className="text-slate-500 text-sm">请按照顺序填写信息，右侧将实时显示判断结果。</p>
+          </div>
+
+          {/* 步骤 1: 检查温度 */}
+          <section className={`bg-white rounded-2xl shadow-sm border border-slate-200 p-6 transition-all duration-300 ${isStepDisabled(1) ? 'opacity-50 grayscale pointer-events-none' : 'opacity-100'}`}>
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between border-b border-slate-100 pb-3 mb-4 gap-4">
+              <div className="flex items-center space-x-2 text-blue-600 font-semibold">
+                <div className="bg-blue-100 p-1.5 rounded-lg"><Thermometer className="w-5 h-5" /></div>
+                <span>1. 检查温度</span>
+              </div>
+              
+              {/* 注意事项 - 右上角 */}
+              <div className="text-xs text-slate-600 bg-amber-50 border border-amber-200 p-2.5 rounded-lg max-w-xs shadow-sm">
+                <div className="flex items-center space-x-1 text-amber-700 font-bold mb-1.5">
+                  <Info className="w-3.5 h-3.5" />
+                  <span>注意事项：</span>
+                </div>
+                <ul className="space-y-1 leading-tight text-amber-900/90 pl-1">
+                  <li>(1) 使用多种浏览器打开，确认温度</li>
+                  <li>(2) 天气网站切换°C、 °F，确认数据为最新</li>
+                  <li>(3) 判断依据优先使用PM的单位</li>
+                </ul>
+              </div>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">城市</label>
+                <div className="relative">
+                  <select 
+                    name="city"
+                    value={formData.city}
+                    onChange={handleInputChange}
+                    className="w-full px-4 py-2.5 pl-10 rounded-xl border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none bg-slate-50/50"
+                  >
+                    {CITIES.map(city => (
+                      <option key={city.name} value={city.name}>{city.label}</option>
+                    ))}
+                  </select>
+                  <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
+                </div>
+              </div>
+
+              {/* 判断依据 - 红色边框高亮 */}
+              <div className="flex items-center space-x-3 pt-2">
+                <span className="text-sm font-bold text-slate-700">判断依据:</span>
+                <div className="flex space-x-2">
+                  <button
+                    onClick={() => setPreferredUnit('C')}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all border ${
+                      formData.preferredTempUnit === 'C' 
+                        ? 'border-red-500 bg-red-50 text-red-600 ring-1 ring-red-500 shadow-sm' 
+                        : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+                    }`}
+                  >
+                    °C (摄氏度)
+                  </button>
+                  <button
+                    onClick={() => setPreferredUnit('F')}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all border ${
+                      formData.preferredTempUnit === 'F' 
+                        ? 'border-red-500 bg-red-50 text-red-600 ring-1 ring-red-500 shadow-sm' 
+                        : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+                    }`}
+                  >
+                    °F (华氏度)
+                  </button>
+                </div>
+              </div>
+
+              {/* 温度双向输入区域 */}
+              <div className="space-y-4">
+                {/* 第一行：提案温度 */}
+                <div className={`p-3 rounded-xl border transition-all ${formData.preferredTempUnit === 'C' ? 'bg-blue-50/50 border-blue-100' : 'bg-slate-50 border-slate-100'}`}>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">提案温度</label>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="relative">
+                      <input 
+                        type="number" 
+                        value={formData.proposalTempC}
+                        onChange={(e) => handleTempChange('proposal', 'C', e.target.value)}
+                        placeholder="0"
+                        className={`w-full px-3 py-2 pr-8 rounded-lg border focus:border-blue-500 outline-none transition-all ${formData.preferredTempUnit === 'C' ? 'border-red-400 ring-1 ring-red-200 bg-white' : 'border-slate-200 bg-slate-50/50'}`}
+                      />
+                      <span className="absolute right-3 top-2 text-slate-400 font-medium">°C</span>
+                    </div>
+                    <div className="relative">
+                      <input 
+                        type="number" 
+                        value={formData.proposalTempF}
+                        onChange={(e) => handleTempChange('proposal', 'F', e.target.value)}
+                        placeholder="32"
+                        className={`w-full px-3 py-2 pr-8 rounded-lg border focus:border-blue-500 outline-none transition-all ${formData.preferredTempUnit === 'F' ? 'border-red-400 ring-1 ring-red-200 bg-white' : 'border-slate-200 bg-slate-50/50'}`}
+                      />
+                      <span className="absolute right-3 top-2 text-slate-400 font-medium">°F</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 第二行：网站最高温 */}
+                <div className={`p-3 rounded-xl border transition-all ${formData.preferredTempUnit === 'C' ? 'bg-blue-50/50 border-blue-100' : 'bg-slate-50 border-slate-100'}`}>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">提案前网站最高温</label>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="relative">
+                      <input 
+                        type="number" 
+                        value={formData.websiteMaxTempC}
+                        onChange={(e) => handleTempChange('websiteMax', 'C', e.target.value)}
+                        placeholder="0"
+                        className={`w-full px-3 py-2 pr-8 rounded-lg border focus:border-blue-500 outline-none transition-all ${formData.preferredTempUnit === 'C' ? 'border-red-400 ring-1 ring-red-200 bg-white' : 'border-slate-200 bg-slate-50/50'}`}
+                      />
+                      <span className="absolute right-3 top-2 text-slate-400 font-medium">°C</span>
+                    </div>
+                    <div className="relative">
+                      <input 
+                        type="number" 
+                        value={formData.websiteMaxTempF}
+                        onChange={(e) => handleTempChange('websiteMax', 'F', e.target.value)}
+                        placeholder="32"
+                        className={`w-full px-3 py-2 pr-8 rounded-lg border focus:border-blue-500 outline-none transition-all ${formData.preferredTempUnit === 'F' ? 'border-red-400 ring-1 ring-red-200 bg-white' : 'border-slate-200 bg-slate-50/50'}`}
+                      />
+                      <span className="absolute right-3 top-2 text-slate-400 font-medium">°F</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* 步骤 2: 检查选项 */}
+          {!isStepHidden(2) && (
+            <section className={`bg-white rounded-2xl shadow-sm border border-slate-200 p-6 transition-all duration-500 ${isStepDisabled(2) ? 'opacity-40 pointer-events-none' : 'opacity-100 ring-2 ring-blue-50'}`}>
+              <div className="flex items-center space-x-2 text-blue-600 font-semibold border-b border-slate-100 pb-3 mb-4">
+                <div className="bg-blue-100 p-1.5 rounded-lg"><List className="w-5 h-5" /></div>
+                <span>2. 检查选项</span>
+              </div>
+              
+              <div className="space-y-4">
+                 <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">提案是否为最后1个选项?</label>
+                    <div className="flex space-x-4">
+                      <label className={`flex-1 cursor-pointer border rounded-xl p-3 flex items-center justify-center transition-all ${formData.isLastOption === 'yes' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'hover:bg-slate-50 border-slate-200'}`}>
+                        <input type="radio" name="isLastOption" value="yes" checked={formData.isLastOption === 'yes'} onChange={handleInputChange} className="hidden" />
+                        <span>是</span>
+                      </label>
+                      <label className={`flex-1 cursor-pointer border rounded-xl p-3 flex items-center justify-center transition-all ${formData.isLastOption === 'no' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'hover:bg-slate-50 border-slate-200'}`}>
+                        <input type="radio" name="isLastOption" value="no" checked={formData.isLastOption === 'no'} onChange={handleInputChange} className="hidden" />
+                        <span>否</span>
+                      </label>
+                    </div>
+                  </div>
+              </div>
+            </section>
+          )}
+
+          {/* 步骤 3: 是否当日 */}
+          <section className={`bg-white rounded-2xl shadow-sm border border-slate-200 p-6 transition-all duration-500 ${isStepDisabled(3) ? 'opacity-40 pointer-events-none' : 'opacity-100 ring-2 ring-blue-50'}`}>
+            <div className="flex items-center space-x-2 text-blue-600 font-semibold border-b border-slate-100 pb-3 mb-4">
+              <div className="bg-blue-100 p-1.5 rounded-lg"><Calendar className="w-5 h-5" /></div>
+              <span>3. 是否当日</span>
+            </div>
+            
+            <div>
+              <div className="flex space-x-4">
+                <label className={`flex-1 cursor-pointer border rounded-xl p-3 flex items-center justify-center transition-all ${formData.isToday === 'yes' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'hover:bg-slate-50 border-slate-200'}`}>
+                  <input type="radio" name="isToday" value="yes" checked={formData.isToday === 'yes'} onChange={handleInputChange} className="hidden" />
+                  <span>是当日</span>
+                </label>
+                <label className={`flex-1 cursor-pointer border rounded-xl p-3 flex items-center justify-center transition-all ${formData.isToday === 'no' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'hover:bg-slate-50 border-slate-200'}`}>
+                  <input type="radio" name="isToday" value="no" checked={formData.isToday === 'no'} onChange={handleInputChange} className="hidden" />
+                  <span>不是当日</span>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          {/* 步骤 4: 检查提案 */}
+          {!isStepHidden(4) && (
+            <section className={`bg-white rounded-2xl shadow-sm border border-slate-200 p-6 transition-all duration-500 ${isStepDisabled(4) ? 'opacity-40 pointer-events-none' : 'opacity-100 ring-2 ring-blue-50'}`}>
+              <div className="flex items-center space-x-2 text-blue-600 font-semibold border-b border-slate-100 pb-3 mb-4">
+                <div className="bg-blue-100 p-1.5 rounded-lg"><FileText className="w-5 h-5" /></div>
+                <span>4. 检查提案</span>
+              </div>
+
+              <div className="space-y-4">
+                <label className="block text-sm font-medium text-slate-700 mb-2">提案类型</label>
+                <div className="flex space-x-4">
+                  <label className={`flex-1 cursor-pointer border rounded-xl p-3 flex items-center justify-center transition-all ${formData.proposalType === 'P2' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'hover:bg-slate-50 border-slate-200'}`}>
+                    <input type="radio" name="proposalType" value="P2" checked={formData.proposalType === 'P2'} onChange={handleInputChange} className="hidden" />
+                    <span>P2 YES</span>
+                  </label>
+                  <label className={`flex-1 cursor-pointer border rounded-xl p-3 flex items-center justify-center transition-all ${formData.proposalType === 'P1' ? 'bg-blue-50 border-blue-500 text-blue-700 font-bold' : 'hover:bg-slate-50 border-slate-200'}`}>
+                    <input type="radio" name="proposalType" value="P1" checked={formData.proposalType === 'P1'} onChange={handleInputChange} className="hidden" />
+                    <span>P1 NO</span>
+                  </label>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* 步骤 5: 检查下个数据点 */}
+          {!isStepHidden(5) && (
+            <section className={`bg-white rounded-2xl shadow-sm border border-slate-200 p-6 transition-all duration-500 ${isStepDisabled(5) ? 'opacity-40 pointer-events-none' : 'opacity-100 ring-2 ring-blue-50'}`}>
+              <div className="flex items-center space-x-2 text-blue-600 font-semibold border-b border-slate-100 pb-3 mb-4">
+                <div className="bg-blue-100 p-1.5 rounded-lg"><Clock className="w-5 h-5" /></div>
+                <span>5. 检查下个数据点</span>
+              </div>
+
+              <div className="space-y-5">
+                {/* 时间戳双列布局 */}
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* 左侧：输入 */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                      提案时间戳（GMT）
+                    </label>
+                    <input 
+                      type="text" 
+                      name="proposalTimestamp"
+                      value={formData.proposalTimestamp}
+                      onChange={handleInputChange}
+                      maxLength={10}
+                      placeholder="如: 1678886400"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-blue-500 outline-none font-mono text-sm"
+                    />
+                  </div>
+                  
+                  {/* 右侧：显示 */}
+                  <div className="flex flex-col">
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                      提案时间（当地时间）
+                    </label>
+                    <div className={`flex-1 flex items-center px-3 py-2 rounded-lg border border-slate-200 bg-white font-mono font-bold text-sm ${formData.localTimeDisplay ? 'text-blue-600' : 'text-slate-300'}`}>
+                      {formData.localTimeDisplay || '--/-- --:-- --'}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      已发布上1个时间点
+                    </label>
+                    <input 
+                      type="text" 
+                      name="prevDataPoint"
+                      value={formData.prevDataPoint}
+                      onChange={handleInputChange}
+                      placeholder="12/5 9:00 PM"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-blue-500 outline-none font-mono text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      未发布下1个时间点
+                    </label>
+                    <input 
+                      type="text" 
+                      name="nextDataPoint"
+                      value={formData.nextDataPoint}
+                      onChange={handleInputChange}
+                      placeholder="12/5 11:00 PM"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-blue-500 outline-none font-mono text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
+        </div>
+
+        {/* --- 右侧结果区 --- */}
+        <div className="lg:col-span-5">
+          <div className="sticky top-6">
+            <div className={`bg-white rounded-3xl shadow-xl border overflow-hidden transition-all duration-500 min-h-[300px] flex flex-col ${
+              analysisState.status === 'complete' 
+                ? resultStyle.border
+                : 'border-slate-100'
+            }`}>
+              
+              {/* 状态指示条 */}
+              <div className={`h-2 w-full ${
+                 analysisState.status === 'complete'
+                  ? resultStyle.bar
+                  : 'bg-slate-200'
+              }`} />
+
+              <div className="p-8 flex-1 flex flex-col items-center justify-center text-center">
+                
+                {analysisState.status === 'waiting' ? (
+                  <>
+                    <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4 border border-slate-100">
+                      <div className="animate-pulse">
+                        <ChevronRight className="w-8 h-8 text-slate-300" />
+                      </div>
+                    </div>
+                    <h2 className="text-xl font-bold text-slate-400 mb-2">等待输入</h2>
+                    <p className="text-slate-400">{analysisState.message}</p>
+                  </>
+                ) : (
+                  <>
+                    {/* 结果图标 */}
+                    <div className={`w-20 h-20 rounded-full flex items-center justify-center mb-6 animate-in zoom-in duration-300 ${resultStyle.iconBg}`}>
+                      {ResultIcon && <ResultIcon className="w-10 h-10" />}
+                    </div>
+
+                    {/* 标题 */}
+                    <h2 className={`text-3xl font-bold mb-3 ${resultStyle.title}`}>
+                      {analysisState.title}
+                    </h2>
+
+                    {/* 原因 (如果不是“可以质疑”或“谨慎质疑”状态，则显示原因摘要) */}
+                    {analysisState.reason && (
+                      <p className="text-lg text-slate-800 font-medium mb-6">
+                        {analysisState.reason}
+                      </p>
+                    )}
+
+                    {/* 详情卡片容器 */}
+                    <div className="w-full space-y-3 text-left">
+                      
+                      {/* 判断依据 (通用) */}
+                      <div className="bg-slate-50 rounded-xl p-4 w-full text-slate-600 text-sm border border-slate-100">
+                        <div className="flex items-start space-x-2">
+                           <AlertTriangle className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
+                           <div>
+                             <p className="font-semibold text-slate-700 mb-1">判断依据：</p>
+                             <p className="whitespace-pre-line leading-relaxed">{analysisState.detail}</p>
+                           </div>
+                        </div>
+                      </div>
+
+                      {/* 质疑准备 (仅限“可以质疑”和“谨慎质疑”状态) */}
+                      {(analysisState.resultType === 'can_challenge' || analysisState.resultType === 'caution') && (
+                        <div className={`rounded-xl p-4 w-full text-sm border ${resultStyle.prepBoxBg} ${resultStyle.prepBoxText} ${resultStyle.prepBoxBorder}`}>
+                          <div className="flex items-start space-x-2">
+                             <ClipboardList className="w-4 h-4 mt-0.5 flex-shrink-0 opacity-80" />
+                             <div>
+                               <p className="font-semibold mb-1 opacity-90">质疑准备：</p>
+                               <p>
+                                 使用 <a href="https://archive.org/" target="_blank" rel="noopener noreferrer" className="underline font-medium hover:opacity-80 inline-flex items-center">
+                                   https://archive.org/ <ExternalLink className="w-3 h-3 ml-0.5" />
+                                 </a> 快照证据
+                               </p>
+                             </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 质疑理由 (仅限“可以质疑”和“谨慎质疑”状态) */}
+                      {(analysisState.resultType === 'can_challenge' || analysisState.resultType === 'caution') && analysisState.challengeReason && (
+                        <div className={`rounded-xl p-4 w-full text-sm border ${resultStyle.reasonBoxBg} ${resultStyle.reasonBoxText} ${resultStyle.reasonBoxBorder}`}>
+                          <div className="flex items-start space-x-2">
+                             <MessageSquare className="w-4 h-4 mt-0.5 flex-shrink-0 opacity-80" />
+                             <div className="flex-1">
+                               <p className="font-semibold mb-2 opacity-90">质疑理由：</p>
+                               
+                               {/* 中文理由 */}
+                               <div className="mb-3 p-2 bg-white/60 rounded-lg border border-black/5">
+                                  <div className="text-xs font-bold opacity-50 mb-1">中文 (CN)</div>
+                                  <p className="whitespace-pre-line leading-relaxed font-medium">
+                                    {analysisState.challengeReason.cn}
+                                  </p>
+                               </div>
+
+                               {/* 英文理由 + 复制按钮 */}
+                               <div className="p-2 bg-white rounded-lg border border-black/5 relative group">
+                                  <div className="text-xs font-bold opacity-50 mb-1">英文 (EN)</div>
+                                  <p className="whitespace-pre-line leading-relaxed pr-8 text-slate-700">
+                                    {analysisState.challengeReason.en}
+                                  </p>
+                                  <button 
+                                    onClick={() => copyToClipboard(analysisState.challengeReason.en)}
+                                    className="absolute top-2 right-2 p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-blue-600 transition-colors"
+                                    title="复制英文理由"
+                                  >
+                                    {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                                  </button>
+                               </div>
+
+                             </div>
+                          </div>
+                        </div>
+                      )}
+
+                    </div>
+                  </>
+                )}
+
+              </div>
+              
+              {/* 底部重置按钮 */}
+              <div className="p-4 bg-slate-50 border-t border-slate-100">
+                <button 
+                  onClick={handleReset}
+                  className="w-full flex items-center justify-center space-x-2 text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors py-3 rounded-xl"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>清空重置</span>
+                </button>
+              </div>
+
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
